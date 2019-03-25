@@ -438,6 +438,139 @@ class PlainTasksArchiveCommand(PlainTasksBase):
         return all_tasks
 
 
+class PlainTasksReportCommand(PlainTasksBase):
+    def runCommand(self, edit, partial=False):
+        rds = 'meta.item.todo.completed'
+        rcs = 'meta.item.todo.cancelled'
+
+        # finding archive section
+        archive_pos = self.view.find(self.archive_name, 0, sublime.LITERAL)
+
+        if partial:
+            all_tasks = self.get_archivable_tasks_within_selections()
+        else:
+            all_tasks = self.get_all_archivable_tasks(archive_pos, rds, rcs)
+
+        if not all_tasks:
+            sublime.status_message('Nothing to archive')
+        else:
+            if archive_pos and archive_pos.a > 0:
+                line = self.view.full_line(archive_pos).end()
+            else:
+                create_archive = u'\n\n＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿\n%s\n' % "Report:"
+                self.view.insert(edit, self.view.size(), create_archive)
+                line = self.view.size()
+
+            projects = get_all_projects_and_separators(self.view)
+
+            # adding tasks to archive section
+            last_indent = 0
+            last_pr = ""
+            last_prs = []
+            for task in all_tasks:
+                line_content = self.view.substr(task)
+                task_content = line_content.strip()
+                tmp = str.split(task_content, '@', 2)
+                if len(tmp) == 2:
+                    task_content = tmp[0].strip()
+                match_task = re.match(r'^\s*(\[[x-]\]|.)(\s+.*$)', line_content, re.U)
+                current_scope = self.view.scope_name(task.a)
+                if rds in current_scope or rcs in current_scope:
+                    pr = self.get_task_project(task, projects)
+                    if pr == "":
+                        eol = u'\n{0}\n'.format(task_content.lstrip())
+                    elif pr != last_pr :
+                        prs = str.split(pr, ' / ')
+                        for i, item in enumerate(prs):
+                            if len(last_prs) > i and last_prs[i] == item:
+                                continue
+                            eol = u'{0}{1}:\n'.format('\n' if i == 0 else '    '*i, item)
+                            line += self.view.insert(edit, line, eol)
+                        last_indent = len(prs)
+                        eol = u'{0}{1}\n'.format('    '*(last_indent), task_content)
+                        last_pr = pr
+                        last_prs = prs
+                    else:
+                        eol = u'{0}{1}\n'.format('    '*(last_indent), task_content)
+                else:
+                    eol = u'{0}\n'.format(task_content.lstrip())
+                line += self.view.insert(edit, line, eol)
+
+            # remove moved tasks (starting from the last one otherwise it screw up regions after the first delete)
+            for task in reversed(all_tasks):
+                self.view.erase(edit, self.view.full_line(task))
+            self.view.run_command('plain_tasks_sort_by_date')
+
+    def get_task_project(self, task, projects):
+        index = -1
+        for ind, pr in enumerate(projects):
+            if task < pr:
+                if ind > 0:
+                    index = ind-1
+                break
+        #if there is no projects for task - return empty string
+        if index == -1:
+            return ''
+
+        prog = re.compile(r'^\n*(\s*)(.+):(?=\s|$)\s*(\@[^\s]+(\(.*?\))?\s*)*')
+        hierarhProject = ''
+
+        if index >= 0:
+            depth = re.match(r"\s*", self.view.substr(self.view.line(task))).group()
+            while index >= 0:
+                strProject = self.view.substr(projects[index])
+                if prog.match(strProject):
+                    spaces = prog.match(strProject).group(1)
+                    if len(spaces) < len(depth):
+                        hierarhProject = prog.match(strProject).group(2) + ((" / " + hierarhProject) if hierarhProject else '')
+                        depth = spaces
+                        if len(depth) == 0:
+                            break
+                else:
+                    sep = re.compile(r'(^\s*)---.{3,5}---+$')
+                    spaces = sep.match(strProject).group(1)
+                    if len(spaces) < len(depth):
+                        depth = spaces
+                        if len(depth) == 0:
+                            break
+                index -= 1
+        if not hierarhProject:
+            return ''
+        else:
+            return hierarhProject
+
+    def get_task_note(self, task, tasks):
+        note_line = task.end() + 1
+        while self.view.scope_name(note_line) == 'text.todo notes.todo ':
+            note = self.view.line(note_line)
+            if note not in tasks:
+                tasks.append(note)
+            note_line = self.view.line(note_line).end() + 1
+
+    def get_all_archivable_tasks(self, archive_pos, rds, rcs):
+        done_tasks = [i for i in self.view.find_by_selector(rds) if i.a < (archive_pos.a if archive_pos and archive_pos.a > 0 else self.view.size())]
+        for i in done_tasks:
+            self.get_task_note(i, done_tasks)
+
+        canc_tasks = [i for i in self.view.find_by_selector(rcs) if i.a < (archive_pos.a if archive_pos and archive_pos.a > 0 else self.view.size())]
+        for i in canc_tasks:
+            self.get_task_note(i, canc_tasks)
+
+        all_tasks = done_tasks + canc_tasks
+        all_tasks.sort()
+        return all_tasks
+
+    def get_archivable_tasks_within_selections(self):
+        all_tasks = []
+        for region in self.view.sel():
+            for l in self.view.lines(region):
+                line = self.view.line(l)
+                if ('completed' in self.view.scope_name(line.a)) or ('cancelled' in self.view.scope_name(line.a)):
+                    all_tasks.append(line)
+                    self.get_task_note(line, all_tasks)
+        return all_tasks
+
+
 class PlainTasksNewTaskDocCommand(sublime_plugin.WindowCommand):
     def run(self):
         view = self.window.new_file()
