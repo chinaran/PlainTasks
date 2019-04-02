@@ -470,7 +470,7 @@ class PlainTasksReportCommand(PlainTasksBase):
             for task in all_tasks:
                 line_content = self.view.substr(task)
                 task_content = line_content.strip()
-                tmp = str.split(task_content, '@', 2)
+                tmp = str.split(task_content, '@', 1)
                 if len(tmp) == 2:
                     task_content = tmp[0].strip()
                 match_task = re.match(r'^\s*(\[[x-]\]|.)(\s+.*$)', line_content, re.U)
